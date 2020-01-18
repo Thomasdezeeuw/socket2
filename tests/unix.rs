@@ -37,21 +37,21 @@ fn from_std_unix_socket() {
 
 #[test]
 fn into_std_unix_stream() {
-    let socket: Socket = Socket::new(Domain::unix(), Type::stream(), None).unwrap();
+    let socket: Socket = Socket::new(Domain::UNIX, Type::stream(), None).unwrap();
     let unix_socket: UnixStream = socket.into();
     drop(unix_socket);
 }
 
 #[test]
 fn into_std_tcp_listener() {
-    let socket: Socket = Socket::new(Domain::unix(), Type::stream(), None).unwrap();
+    let socket: Socket = Socket::new(Domain::UNIX, Type::stream(), None).unwrap();
     let unix_socket: UnixListener = socket.into();
     drop(unix_socket);
 }
 
 #[test]
 fn into_std_udp_socket() {
-    let socket: Socket = Socket::new(Domain::unix(), Type::dgram(), None).unwrap();
+    let socket: Socket = Socket::new(Domain::UNIX, Type::dgram(), None).unwrap();
     let unix_socket: UnixDatagram = socket.into();
     drop(unix_socket);
 }

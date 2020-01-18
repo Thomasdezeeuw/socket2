@@ -42,6 +42,8 @@
 // Disallow warnings in examples.
 #![doc(test(attr(deny(warnings))))]
 
+use std::net::SocketAddr;
+
 mod sockaddr;
 mod socket;
 mod utils;
@@ -67,18 +69,33 @@ pub use socket::Socket;
 ///
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
-#[derive(Copy, Clone, Debug)]
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub struct Domain(c_int);
 
 impl Domain {
     /// Domain for IPv4 communication, corresponding to `AF_INET`.
-    pub fn ipv4() -> Domain {
-        Domain(sys::AF_INET)
-    }
+    pub const IPV4: Domain = Domain(sys::AF_INET);
 
     /// Domain for IPv6 communication, corresponding to `AF_INET6`.
-    pub fn ipv6() -> Domain {
-        Domain(sys::AF_INET6)
+    pub const IPV6: Domain = Domain(sys::AF_INET6);
+
+    /// Returns the correct `Domain` for the `addr`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::SocketAddr;
+    /// use socket2::Domain;
+    ///
+    /// let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+    /// let domain = Domain::for_ip(&addr);
+    /// assert_eq!(domain, Domain::IPV4);
+    /// ```
+    pub fn for_ip(addr: &SocketAddr) -> Domain {
+        match addr {
+            SocketAddr::V4(..) => Domain::IPV4,
+            SocketAddr::V6(..) => Domain::IPV6,
+        }
     }
 }
 
@@ -188,15 +205,3 @@ impl From<Protocol> for c_int {
         p.0
     }
 }
-
-/*
-use crate::utils::NetInt;
-
-fn hton<I: NetInt>(i: I) -> I {
-    i.to_be()
-}
-
-fn ntoh<I: NetInt>(i: I) -> I {
-    I::from_be(i)
-}
-*/

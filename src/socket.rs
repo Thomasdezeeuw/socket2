@@ -38,7 +38,7 @@ use crate::{Domain, Protocol, SockAddr, Type};
 /// use socket2::{Socket, Domain, Type};
 ///
 /// // Create a new `Socket`.
-/// let socket = Socket::new(Domain::ipv4(), Type::stream(), None)?;
+/// let socket = Socket::new(Domain::IPV4, Type::stream(), None)?;
 ///
 /// // Bind the socket to an addresses.
 /// let addr1: SocketAddr = "127.0.0.1:15123".parse().unwrap();
@@ -177,7 +177,7 @@ impl Socket {
     /// use socket2::{Domain, Socket, Type};
     ///
     /// # fn main() -> io::Result<()> {
-    /// let socket = Socket::new(Domain::ipv4(), Type::stream(), None)?;
+    /// let socket = Socket::new(Domain::IPV4, Type::stream(), None)?;
     ///
     /// // Retrieve the flags, using nothing `()` as argument.
     /// let flags = socket.fcntl(libc::F_GETFD, ())?;

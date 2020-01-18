@@ -29,21 +29,21 @@ fn from_std_udp_socket() {
 
 #[test]
 fn into_std_tcp_stream() {
-    let socket: Socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+    let socket: Socket = Socket::new(Domain::IPV4, Type::stream(), None).unwrap();
     let tcp_socket: TcpStream = socket.into();
     drop(tcp_socket);
 }
 
 #[test]
 fn into_std_tcp_listener() {
-    let socket: Socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+    let socket: Socket = Socket::new(Domain::IPV4, Type::stream(), None).unwrap();
     let tcp_socket: TcpListener = socket.into();
     drop(tcp_socket);
 }
 
 #[test]
 fn into_std_udp_socket() {
-    let socket: Socket = Socket::new(Domain::ipv4(), Type::dgram(), None).unwrap();
+    let socket: Socket = Socket::new(Domain::IPV4, Type::dgram(), None).unwrap();
     let udp_socket: UdpSocket = socket.into();
     drop(udp_socket);
 }
@@ -53,7 +53,7 @@ fn socket_connect_tcp() {
     let listener = TcpListener::bind(any_local_ipv4_addr()).unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let socket: TcpStream = Socket::new(Domain::ipv4(), Type::stream(), None)
+    let socket: TcpStream = Socket::new(Domain::IPV4, Type::stream(), None)
         .and_then(|socket| socket.connect(&addr.into()).map(|()| socket.into()))
         .unwrap();
     assert_eq!(socket.peer_addr().unwrap(), addr);
@@ -66,7 +66,7 @@ fn socket_connect_tcp() {
 
 #[test]
 fn socket_bind_tcp() {
-    let socket: TcpListener = Socket::new(Domain::ipv4(), Type::stream(), None)
+    let socket: TcpListener = Socket::new(Domain::IPV4, Type::stream(), None)
         .and_then(|socket| {
             socket
                 .bind(&any_local_ipv4_addr().into())
@@ -79,7 +79,7 @@ fn socket_bind_tcp() {
 
 #[test]
 fn socket_listen_tcp() {
-    let socket: TcpListener = Socket::new(Domain::ipv4(), Type::stream(), None)
+    let socket: TcpListener = Socket::new(Domain::IPV4, Type::stream(), None)
         .and_then(|socket| {
             socket.bind(&any_local_ipv4_addr().into())?;
             socket.listen(1024)?;
@@ -99,7 +99,7 @@ fn socket_listen_tcp() {
 // Also tests `local_addr` and `peer_addr`.
 #[test]
 fn socket_accept_tcp() {
-    let socket: Socket = Socket::new(Domain::ipv4(), Type::stream(), None)
+    let socket: Socket = Socket::new(Domain::IPV4, Type::stream(), None)
         .and_then(|socket| {
             socket.bind(&any_local_ipv4_addr().into())?;
             socket.listen(1024)?;
