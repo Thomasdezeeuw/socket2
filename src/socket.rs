@@ -8,201 +8,107 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fmt;
-use std::io::{self, Read, Write};
-use std::net::{self, Ipv4Addr, Ipv6Addr, Shutdown};
-#[cfg(all(unix, feature = "unix"))]
-use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
-use std::time::Duration;
+use std::net::{Shutdown, TcpListener, TcpStream, UdpSocket};
+#[cfg(unix)]
+use std::os::unix::io::{FromRawFd, IntoRawFd};
+use std::{fmt, io};
 
-use crate::sys;
+use crate::sys::{self, c_int};
 use crate::{Domain, Protocol, SockAddr, Type};
 
-/// Newtype, owned, wrapper around a system socket.
+/// An owned system socket.
 ///
-/// This type simply wraps an instance of a file descriptor (`c_int`) on Unix
-/// and an instance of `SOCKET` on Windows. This is the main type exported by
-/// this crate and is intended to mirror the raw semantics of sockets on
-/// platforms as closely as possible. Almost all methods correspond to
-/// precisely one libc or OS API call which is essentially just a "Rustic
-/// translation" of what's below.
+/// This type simply wraps an instance of a file descriptor (`int`) on Unix and
+/// an instance of `SOCKET` on Windows. This is the main type exported by this
+/// crate and is intended to mirror the raw semantics of sockets on platforms as
+/// closely as possible. All methods correspond to precisely one libc or OS API
+/// call which is essentially just a "Rustic translation" of what's below.
+///
+/// # Notes
+///
+/// This type can be converted to and from all network types provided by the
+/// standard library using the [`From`] and [`Into`] traits. Is up to the user
+/// to ensure the socket is setup correctly for a given type!
 ///
 /// # Examples
 ///
-/// ```no_run
-/// use std::net::SocketAddr;
-/// use socket2::{Socket, Domain, Type, SockAddr};
+/// ```
+/// # fn main() -> std::io::Result<()> {
+/// use std::net::{SocketAddr, TcpListener};
+/// use socket2::{Socket, Domain, Type};
 ///
-/// // create a TCP listener bound to two addresses
-/// let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+/// // Create a new `Socket`.
+/// let socket = Socket::new(Domain::ipv4(), Type::stream(), None)?;
 ///
-/// socket.bind(&"127.0.0.1:12345".parse::<SocketAddr>().unwrap().into()).unwrap();
-/// socket.bind(&"127.0.0.1:12346".parse::<SocketAddr>().unwrap().into()).unwrap();
-/// socket.listen(128).unwrap();
+/// // Bind the socket to an addresses.
+/// let addr1: SocketAddr = "127.0.0.1:15123".parse().unwrap();
+/// socket.bind(&addr1.into())?;
 ///
-/// let listener = socket.into_tcp_listener();
-/// // ...
+/// // Start listening on the socket.
+/// socket.listen(128)?;
+///
+/// // Finally convert it to `TcpListener` from the standard library. Now it can
+/// // be used like any other `TcpListener`.
+/// let listener: TcpListener = socket.into();
+/// # drop(listener);
+/// # Ok(())
+/// # }
 /// ```
 pub struct Socket {
-    // The `sys` module most have access to the socket.
-    pub(crate) inner: sys::Socket,
+    // The `sys` module must have access to the raw socket to implement OS
+    // specific additional methods, e.g. Unix Domain sockets (UDS).
+    pub(crate) inner: sys::RawSocket,
 }
 
 impl Socket {
     /// Creates a new socket ready to be configured.
     ///
-    /// This function corresponds to `socket(2)` and simply creates a new
-    /// socket, no other configuration is done and further functions must be
-    /// invoked to configure this socket.
+    /// This function corresponds to `socket(2)`.
     pub fn new(domain: Domain, type_: Type, protocol: Option<Protocol>) -> io::Result<Socket> {
-        let protocol = protocol.map(|p| p.0).unwrap_or(0);
-        Ok(Socket {
-            inner: sys::Socket::new(domain.0, type_.0, protocol)?,
-        })
-    }
-
-    /// Creates a pair of sockets which are connected to each other.
-    ///
-    /// This function corresponds to `socketpair(2)`.
-    ///
-    /// This function is only available on Unix when the `pair` feature is
-    /// enabled.
-    #[cfg(all(unix, feature = "pair"))]
-    pub fn pair(
-        domain: Domain,
-        type_: Type,
-        protocol: Option<Protocol>,
-    ) -> io::Result<(Socket, Socket)> {
-        let protocol = protocol.map(|p| p.0).unwrap_or(0);
-        let sockets = sys::Socket::pair(domain.0, type_.0, protocol)?;
-        Ok((Socket { inner: sockets.0 }, Socket { inner: sockets.1 }))
-    }
-
-    /// Consumes this `Socket`, converting it to a `TcpStream`.
-    pub fn into_tcp_stream(self) -> net::TcpStream {
-        self.into()
-    }
-
-    /// Consumes this `Socket`, converting it to a `TcpListener`.
-    pub fn into_tcp_listener(self) -> net::TcpListener {
-        self.into()
-    }
-
-    /// Consumes this `Socket`, converting it to a `UdpSocket`.
-    pub fn into_udp_socket(self) -> net::UdpSocket {
-        self.into()
-    }
-
-    /// Consumes this `Socket`, converting it into a `UnixStream`.
-    ///
-    /// This function is only available on Unix when the `unix` feature is
-    /// enabled.
-    #[cfg(all(unix, feature = "unix"))]
-    pub fn into_unix_stream(self) -> UnixStream {
-        self.into()
-    }
-
-    /// Consumes this `Socket`, converting it into a `UnixListener`.
-    ///
-    /// This function is only available on Unix when the `unix` feature is
-    /// enabled.
-    #[cfg(all(unix, feature = "unix"))]
-    pub fn into_unix_listener(self) -> UnixListener {
-        self.into()
-    }
-
-    /// Consumes this `Socket`, converting it into a `UnixDatagram`.
-    ///
-    /// This function is only available on Unix when the `unix` feature is
-    /// enabled.
-    #[cfg(all(unix, feature = "unix"))]
-    pub fn into_unix_datagram(self) -> UnixDatagram {
-        self.into()
+        sys::socket(domain.0, type_.0, protocol.map(|p| p.0).unwrap_or(0))
     }
 
     /// Initiate a connection on this socket to the specified address.
     ///
-    /// This function directly corresponds to the connect(2) function on Windows
-    /// and Unix.
-    ///
-    /// An error will be returned if `listen` or `connect` has already been
-    /// called on this builder.
+    /// This function directly corresponds to the `connect(2)` function.
     pub fn connect(&self, addr: &SockAddr) -> io::Result<()> {
-        self.inner.connect(addr)
-    }
-
-    /// Initiate a connection on this socket to the specified address, only
-    /// only waiting for a certain period of time for the connection to be
-    /// established.
-    ///
-    /// Unlike many other methods on `Socket`, this does *not* correspond to a
-    /// single C function. It sets the socket to nonblocking mode, connects via
-    /// connect(2), and then waits for the connection to complete with poll(2)
-    /// on Unix and select on Windows. When the connection is complete, the
-    /// socket is set back to blocking mode. On Unix, this will loop over
-    /// `EINTR` errors.
-    ///
-    /// # Warnings
-    ///
-    /// The nonblocking state of the socket is overridden by this function -
-    /// it will be returned in blocking mode on success, and in an indeterminate
-    /// state on failure.
-    ///
-    /// If the connection request times out, it may still be processing in the
-    /// background - a second call to `connect` or `connect_timeout` may fail.
-    pub fn connect_timeout(&self, addr: &SockAddr, timeout: Duration) -> io::Result<()> {
-        self.inner.connect_timeout(addr, timeout)
+        sys::connect(self.inner, addr.as_ptr(), addr.len())
     }
 
     /// Binds this socket to the specified address.
     ///
-    /// This function directly corresponds to the bind(2) function on Windows
-    /// and Unix.
+    /// This function directly corresponds to the `bind(2)` function.
     pub fn bind(&self, addr: &SockAddr) -> io::Result<()> {
-        self.inner.bind(addr)
+        sys::bind(self.inner, addr.as_ptr(), addr.len())
+    }
+
+    /// Returns the socket address of the local half of this connection.
+    ///
+    /// This function directly corresponds to the `getsockname(2)` function.
+    pub fn local_addr(&self) -> io::Result<SockAddr> {
+        sys::getsockname(self.inner)
+    }
+
+    /// Returns the socket address of the remote peer of this connection.
+    ///
+    /// This function directly corresponds to the `getpeername(2)` function.
+    pub fn peer_addr(&self) -> io::Result<SockAddr> {
+        sys::getpeername(self.inner)
     }
 
     /// Mark a socket as ready to accept incoming connection requests using
-    /// accept()
+    /// `accept(2)`.
     ///
-    /// This function directly corresponds to the listen(2) function on Windows
-    /// and Unix.
-    ///
-    /// An error will be returned if `listen` or `connect` has already been
-    /// called on this builder.
-    pub fn listen(&self, backlog: i32) -> io::Result<()> {
-        self.inner.listen(backlog)
+    /// This function directly corresponds to the `listen(2)` function.
+    pub fn listen(&self, backlog: c_int) -> io::Result<()> {
+        sys::listen(self.inner, backlog)
     }
 
     /// Accept a new incoming connection from this listener.
     ///
-    /// This function will block the calling thread until a new connection is
-    /// established. When established, the corresponding `Socket` and the
-    /// remote peer's address will be returned.
+    /// This function directly corresponds to the `accept(2)` function.
     pub fn accept(&self) -> io::Result<(Socket, SockAddr)> {
-        self.inner
-            .accept()
-            .map(|(socket, addr)| (Socket { inner: socket }, addr))
-    }
-
-    /// Returns the socket address of the local half of this TCP connection.
-    pub fn local_addr(&self) -> io::Result<SockAddr> {
-        self.inner.local_addr()
-    }
-
-    /// Returns the socket address of the remote peer of this TCP connection.
-    pub fn peer_addr(&self) -> io::Result<SockAddr> {
-        self.inner.peer_addr()
-    }
-
-    /// Creates a new independently owned handle to the underlying socket.
-    ///
-    /// The returned `TcpStream` is a reference to the same stream that this
-    /// object references. Both handles will read and write the same stream of
-    /// data, and options set on one stream will be propagated to the other
-    /// stream.
-    pub fn try_clone(&self) -> io::Result<Socket> {
-        self.inner.try_clone().map(|s| Socket { inner: s })
+        sys::accept(self.inner)
     }
 
     /// Get the value of the `SO_ERROR` option on this socket.
@@ -211,15 +117,14 @@ impl Socket {
     /// the field in the process. This can be useful for checking errors between
     /// calls.
     pub fn take_error(&self) -> io::Result<Option<io::Error>> {
-        self.inner.take_error()
-    }
-
-    /// Moves this TCP stream into or out of nonblocking mode.
-    ///
-    /// On Unix this corresponds to calling fcntl, and on Windows this
-    /// corresponds to calling ioctlsocket.
-    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
-        self.inner.set_nonblocking(nonblocking)
+        self.getsockopt::<c_int>(libc::SOL_SOCKET, libc::SO_ERROR)
+            .map(|errno| {
+                if errno == 0 {
+                    None
+                } else {
+                    Some(io::Error::from_raw_os_error(errno))
+                }
+            })
     }
 
     /// Shuts down the read, write, or both halves of this connection.
@@ -227,689 +132,110 @@ impl Socket {
     /// This function will cause all pending and future I/O on the specified
     /// portions to return immediately with an appropriate value.
     pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        self.inner.shutdown(how)
-    }
-
-    /// Receives data on the socket from the remote address to which it is
-    /// connected.
-    ///
-    /// The [`connect`] method will connect this socket to a remote address. This
-    /// method will fail if the socket is not connected.
-    ///
-    /// [`connect`]: #method.connect
-    pub fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.recv(buf)
-    }
-
-    /// Receives data on the socket from the remote adress to which it is
-    /// connected, without removing that data from the queue. On success,
-    /// returns the number of bytes peeked.
-    ///
-    /// Successive calls return the same data. This is accomplished by passing
-    /// `MSG_PEEK` as a flag to the underlying `recv` system call.
-    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.peek(buf)
-    }
-
-    /// Receives data from the socket. On success, returns the number of bytes
-    /// read and the address from whence the data came.
-    pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SockAddr)> {
-        self.inner.recv_from(buf)
-    }
-
-    /// Receives data from the socket, without removing it from the queue.
-    ///
-    /// Successive calls return the same data. This is accomplished by passing
-    /// `MSG_PEEK` as a flag to the underlying `recvfrom` system call.
-    ///
-    /// On success, returns the number of bytes peeked and the address from
-    /// whence the data came.
-    pub fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SockAddr)> {
-        self.inner.peek_from(buf)
-    }
-
-    /// Sends data on the socket to a connected peer.
-    ///
-    /// This is typically used on TCP sockets or datagram sockets which have
-    /// been connected.
-    ///
-    /// On success returns the number of bytes that were sent.
-    pub fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.send(buf)
-    }
-
-    /// Sends data on the socket to the given address. On success, returns the
-    /// number of bytes written.
-    ///
-    /// This is typically used on UDP or datagram-oriented sockets. On success
-    /// returns the number of bytes that were sent.
-    pub fn send_to(&self, buf: &[u8], addr: &SockAddr) -> io::Result<usize> {
-        self.inner.send_to(buf, addr)
-    }
-
-    // ================================================
-
-    /// Gets the value of the `IP_TTL` option for this socket.
-    ///
-    /// For more information about this option, see [`set_ttl`][link].
-    ///
-    /// [link]: #method.set_ttl
-    pub fn ttl(&self) -> io::Result<u32> {
-        self.inner.ttl()
-    }
-
-    /// Sets the value for the `IP_TTL` option on this socket.
-    ///
-    /// This value sets the time-to-live field that is used in every packet sent
-    /// from this socket.
-    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        self.inner.set_ttl(ttl)
-    }
-
-    /// Gets the value of the `IPV6_UNICAST_HOPS` option for this socket.
-    ///
-    /// Specifies the hop limit for ipv6 unicast packets
-    pub fn unicast_hops_v6(&self) -> io::Result<u32> {
-        self.inner.unicast_hops_v6()
-    }
-
-    /// Sets the value for the `IPV6_UNICAST_HOPS` option on this socket.
-    ///
-    /// Specifies the hop limit for ipv6 unicast packets
-    pub fn set_unicast_hops_v6(&self, ttl: u32) -> io::Result<()> {
-        self.inner.set_unicast_hops_v6(ttl)
-    }
-
-    /// Gets the value of the `IPV6_V6ONLY` option for this socket.
-    ///
-    /// For more information about this option, see [`set_only_v6`][link].
-    ///
-    /// [link]: #method.set_only_v6
-    pub fn only_v6(&self) -> io::Result<bool> {
-        self.inner.only_v6()
-    }
-
-    /// Sets the value for the `IPV6_V6ONLY` option on this socket.
-    ///
-    /// If this is set to `true` then the socket is restricted to sending and
-    /// receiving IPv6 packets only. In this case two IPv4 and IPv6 applications
-    /// can bind the same port at the same time.
-    ///
-    /// If this is set to `false` then the socket can be used to send and
-    /// receive packets from an IPv4-mapped IPv6 address.
-    pub fn set_only_v6(&self, only_v6: bool) -> io::Result<()> {
-        self.inner.set_only_v6(only_v6)
-    }
-
-    /// Returns the read timeout of this socket.
-    ///
-    /// If the timeout is `None`, then `read` calls will block indefinitely.
-    pub fn read_timeout(&self) -> io::Result<Option<Duration>> {
-        self.inner.read_timeout()
-    }
-
-    /// Sets the read timeout to the timeout specified.
-    ///
-    /// If the value specified is `None`, then `read` calls will block
-    /// indefinitely. It is an error to pass the zero `Duration` to this
-    /// method.
-    pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
-        self.inner.set_read_timeout(dur)
-    }
-
-    /// Returns the write timeout of this socket.
-    ///
-    /// If the timeout is `None`, then `write` calls will block indefinitely.
-    pub fn write_timeout(&self) -> io::Result<Option<Duration>> {
-        self.inner.write_timeout()
-    }
-
-    /// Sets the write timeout to the timeout specified.
-    ///
-    /// If the value specified is `None`, then `write` calls will block
-    /// indefinitely. It is an error to pass the zero `Duration` to this
-    /// method.
-    pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
-        self.inner.set_write_timeout(dur)
-    }
-
-    /// Gets the value of the `TCP_NODELAY` option on this socket.
-    ///
-    /// For more information about this option, see [`set_nodelay`][link].
-    ///
-    /// [link]: #method.set_nodelay
-    pub fn nodelay(&self) -> io::Result<bool> {
-        self.inner.nodelay()
-    }
-
-    /// Sets the value of the `TCP_NODELAY` option on this socket.
-    ///
-    /// If set, this option disables the Nagle algorithm. This means that
-    /// segments are always sent as soon as possible, even if there is only a
-    /// small amount of data. When not set, data is buffered until there is a
-    /// sufficient amount to send out, thereby avoiding the frequent sending of
-    /// small packets.
-    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
-        self.inner.set_nodelay(nodelay)
-    }
-
-    /// Sets the value of the `SO_BROADCAST` option for this socket.
-    ///
-    /// When enabled, this socket is allowed to send packets to a broadcast
-    /// address.
-    pub fn broadcast(&self) -> io::Result<bool> {
-        self.inner.broadcast()
-    }
-
-    /// Gets the value of the `SO_BROADCAST` option for this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_broadcast`][link].
-    ///
-    /// [link]: #method.set_broadcast
-    pub fn set_broadcast(&self, broadcast: bool) -> io::Result<()> {
-        self.inner.set_broadcast(broadcast)
-    }
-
-    /// Gets the value of the `IP_MULTICAST_LOOP` option for this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_multicast_loop_v4`][link].
-    ///
-    /// [link]: #method.set_multicast_loop_v4
-    pub fn multicast_loop_v4(&self) -> io::Result<bool> {
-        self.inner.multicast_loop_v4()
-    }
-
-    /// Sets the value of the `IP_MULTICAST_LOOP` option for this socket.
-    ///
-    /// If enabled, multicast packets will be looped back to the local socket.
-    /// Note that this may not have any affect on IPv6 sockets.
-    pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> io::Result<()> {
-        self.inner.set_multicast_loop_v4(multicast_loop_v4)
-    }
-
-    /// Gets the value of the `IP_MULTICAST_TTL` option for this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_multicast_ttl_v4`][link].
-    ///
-    /// [link]: #method.set_multicast_ttl_v4
-    pub fn multicast_ttl_v4(&self) -> io::Result<u32> {
-        self.inner.multicast_ttl_v4()
-    }
-
-    /// Sets the value of the `IP_MULTICAST_TTL` option for this socket.
-    ///
-    /// Indicates the time-to-live value of outgoing multicast packets for
-    /// this socket. The default value is 1 which means that multicast packets
-    /// don't leave the local network unless explicitly requested.
-    ///
-    /// Note that this may not have any affect on IPv6 sockets.
-    pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> io::Result<()> {
-        self.inner.set_multicast_ttl_v4(multicast_ttl_v4)
-    }
-
-    /// Gets the value of the `IPV6_MULTICAST_HOPS` option for this socket
-    ///
-    /// For more information about this option, see
-    /// [`set_multicast_hops_v6`][link].
-    ///
-    /// [link]: #method.set_multicast_hops_v6
-    pub fn multicast_hops_v6(&self) -> io::Result<u32> {
-        self.inner.multicast_hops_v6()
-    }
-
-    /// Sets the value of the `IPV6_MULTICAST_HOPS` option for this socket
-    ///
-    /// Indicates the number of "routers" multicast packets will transit for
-    /// this socket. The default value is 1 which means that multicast packets
-    /// don't leave the local network unless explicitly requested.
-    pub fn set_multicast_hops_v6(&self, hops: u32) -> io::Result<()> {
-        self.inner.set_multicast_hops_v6(hops)
-    }
-
-    /// Gets the value of the `IP_MULTICAST_IF` option for this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_multicast_if_v4`][link].
-    ///
-    /// [link]: #method.set_multicast_if_v4
-    ///
-    /// Returns the interface to use for routing multicast packets.
-    pub fn multicast_if_v4(&self) -> io::Result<Ipv4Addr> {
-        self.inner.multicast_if_v4()
-    }
-
-    /// Sets the value of the `IP_MULTICAST_IF` option for this socket.
-    ///
-    /// Specifies the interface to use for routing multicast packets.
-    pub fn set_multicast_if_v4(&self, interface: &Ipv4Addr) -> io::Result<()> {
-        self.inner.set_multicast_if_v4(interface)
-    }
-
-    /// Gets the value of the `IPV6_MULTICAST_IF` option for this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_multicast_if_v6`][link].
-    ///
-    /// [link]: #method.set_multicast_if_v6
-    ///
-    /// Returns the interface to use for routing multicast packets.
-    pub fn multicast_if_v6(&self) -> io::Result<u32> {
-        self.inner.multicast_if_v6()
-    }
-
-    /// Sets the value of the `IPV6_MULTICAST_IF` option for this socket.
-    ///
-    /// Specifies the interface to use for routing multicast packets. Unlike ipv4, this
-    /// is generally required in ipv6 contexts where network routing prefixes may
-    /// overlap.
-    pub fn set_multicast_if_v6(&self, interface: u32) -> io::Result<()> {
-        self.inner.set_multicast_if_v6(interface)
-    }
-
-    /// Gets the value of the `IPV6_MULTICAST_LOOP` option for this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_multicast_loop_v6`][link].
-    ///
-    /// [link]: #method.set_multicast_loop_v6
-    pub fn multicast_loop_v6(&self) -> io::Result<bool> {
-        self.inner.multicast_loop_v6()
-    }
-
-    /// Sets the value of the `IPV6_MULTICAST_LOOP` option for this socket.
-    ///
-    /// Controls whether this socket sees the multicast packets it sends itself.
-    /// Note that this may not have any affect on IPv4 sockets.
-    pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> io::Result<()> {
-        self.inner.set_multicast_loop_v6(multicast_loop_v6)
-    }
-
-    /// Executes an operation of the `IP_ADD_MEMBERSHIP` type.
-    ///
-    /// This function specifies a new multicast group for this socket to join.
-    /// The address must be a valid multicast address, and `interface` is the
-    /// address of the local interface with which the system should join the
-    /// multicast group. If it's equal to `INADDR_ANY` then an appropriate
-    /// interface is chosen by the system.
-    pub fn join_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> io::Result<()> {
-        self.inner.join_multicast_v4(multiaddr, interface)
-    }
-
-    /// Executes an operation of the `IPV6_ADD_MEMBERSHIP` type.
-    ///
-    /// This function specifies a new multicast group for this socket to join.
-    /// The address must be a valid multicast address, and `interface` is the
-    /// index of the interface to join/leave (or 0 to indicate any interface).
-    pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> io::Result<()> {
-        self.inner.join_multicast_v6(multiaddr, interface)
-    }
-
-    /// Executes an operation of the `IP_DROP_MEMBERSHIP` type.
-    ///
-    /// For more information about this option, see
-    /// [`join_multicast_v4`][link].
-    ///
-    /// [link]: #method.join_multicast_v4
-    pub fn leave_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> io::Result<()> {
-        self.inner.leave_multicast_v4(multiaddr, interface)
-    }
-
-    /// Executes an operation of the `IPV6_DROP_MEMBERSHIP` type.
-    ///
-    /// For more information about this option, see
-    /// [`join_multicast_v6`][link].
-    ///
-    /// [link]: #method.join_multicast_v6
-    pub fn leave_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> io::Result<()> {
-        self.inner.leave_multicast_v6(multiaddr, interface)
-    }
-
-    /// Reads the linger duration for this socket by getting the SO_LINGER
-    /// option
-    pub fn linger(&self) -> io::Result<Option<Duration>> {
-        self.inner.linger()
-    }
-
-    /// Sets the linger duration of this socket by setting the SO_LINGER option
-    pub fn set_linger(&self, dur: Option<Duration>) -> io::Result<()> {
-        self.inner.set_linger(dur)
-    }
-
-    /// Check the `SO_REUSEADDR` option on this socket.
-    pub fn reuse_address(&self) -> io::Result<bool> {
-        self.inner.reuse_address()
-    }
-
-    /// Set value for the `SO_REUSEADDR` option on this socket.
-    ///
-    /// This indicates that futher calls to `bind` may allow reuse of local
-    /// addresses. For IPv4 sockets this means that a socket may bind even when
-    /// there's a socket already listening on this port.
-    pub fn set_reuse_address(&self, reuse: bool) -> io::Result<()> {
-        self.inner.set_reuse_address(reuse)
-    }
-
-    /// Gets the value of the `SO_RCVBUF` option on this socket.
-    ///
-    /// For more information about this option, see
-    /// [`set_recv_buffer_size`][link].
-    ///
-    /// [link]: #method.set_recv_buffer_size
-    pub fn recv_buffer_size(&self) -> io::Result<usize> {
-        self.inner.recv_buffer_size()
-    }
-
-    /// Sets the value of the `SO_RCVBUF` option on this socket.
-    ///
-    /// Changes the size of the operating system's receive buffer associated
-    /// with the socket.
-    pub fn set_recv_buffer_size(&self, size: usize) -> io::Result<()> {
-        self.inner.set_recv_buffer_size(size)
-    }
-
-    /// Gets the value of the `SO_SNDBUF` option on this socket.
-    ///
-    /// For more information about this option, see [`set_send_buffer`][link].
-    ///
-    /// [link]: #method.set_send_buffer
-    pub fn send_buffer_size(&self) -> io::Result<usize> {
-        self.inner.send_buffer_size()
-    }
-
-    /// Sets the value of the `SO_SNDBUF` option on this socket.
-    ///
-    /// Changes the size of the operating system's send buffer associated with
-    /// the socket.
-    pub fn set_send_buffer_size(&self, size: usize) -> io::Result<()> {
-        self.inner.set_send_buffer_size(size)
-    }
-
-    /// Returns whether keepalive messages are enabled on this socket, and if so
-    /// the duration of time between them.
-    ///
-    /// For more information about this option, see [`set_keepalive`][link].
-    ///
-    /// [link]: #method.set_keepalive
-    pub fn keepalive(&self) -> io::Result<Option<Duration>> {
-        self.inner.keepalive()
-    }
-
-    /// Sets whether keepalive messages are enabled to be sent on this socket.
-    ///
-    /// On Unix, this option will set the `SO_KEEPALIVE` as well as the
-    /// `TCP_KEEPALIVE` or `TCP_KEEPIDLE` option (depending on your platform).
-    /// On Windows, this will set the `SIO_KEEPALIVE_VALS` option.
-    ///
-    /// If `None` is specified then keepalive messages are disabled, otherwise
-    /// the duration specified will be the time to remain idle before sending a
-    /// TCP keepalive probe.
-    ///
-    /// Some platforms specify this value in seconds, so sub-second
-    /// specifications may be omitted.
-    pub fn set_keepalive(&self, keepalive: Option<Duration>) -> io::Result<()> {
-        self.inner.set_keepalive(keepalive)
-    }
-
-    /// Check the value of the `SO_REUSEPORT` option on this socket.
-    ///
-    /// This function is only available on Unix.
-    #[cfg(all(unix, not(target_os = "solaris")))]
-    pub fn reuse_port(&self) -> io::Result<bool> {
-        self.inner.reuse_port()
-    }
-
-    /// Set value for the `SO_REUSEPORT` option on this socket.
-    ///
-    /// This indicates that further calls to `bind` may allow reuse of local
-    /// addresses. For IPv4 sockets this means that a socket may bind even when
-    /// there's a socket already listening on this port.
-    ///
-    /// This function is only available on Unix.
-    #[cfg(all(unix, not(target_os = "solaris")))]
-    pub fn set_reuse_port(&self, reuse: bool) -> io::Result<()> {
-        self.inner.set_reuse_port(reuse)
+        sys::shutdown(self.inner, how)
     }
 }
 
-impl Read for Socket {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
+impl Socket {
+    /// Set a socket option.
+    ///
+    /// This function directly corresponds to the `setsockopt(2)` function. As
+    /// different options use different option types the user must define the
+    /// correct type `T`!
+    pub fn setsockopt<T>(&self, level: c_int, optname: c_int, opt: &T) -> io::Result<()> {
+        sys::setsockopt(self.inner, level, optname, opt)
+    }
+
+    /// Get a socket option.
+    ///
+    /// This function directly corresponds to the `getsockopt(2)` function. As
+    /// different options have different return types the user must define the
+    /// return type `T` correctly!
+    ///
+    /// For an example usage see [`Socket::take_error`].
+    ///
+    /// # Notes
+    ///
+    /// Currently this will panic (in debug mode) if `T` isn't completely
+    /// written to, it doesn't support options which partly write to `T`.
+    pub fn getsockopt<T>(&self, level: c_int, optname: c_int) -> io::Result<T> {
+        sys::getsockopt(self.inner, level, optname)
+    }
+
+    /// Manipulate the file descriptor options of the socket.
+    ///
+    /// This function directly corresponds to the `fcntl(2)` function. As
+    /// different command have different options the user must defined the
+    /// correct type `T`!
+    ///
+    /// # Examples
+    ///
+    /// The following example retrieves and sets the file descriptor flags.
+    ///
+    /// ```
+    /// use std::io;
+    /// use socket2::{Domain, Socket, Type};
+    ///
+    /// # fn main() -> io::Result<()> {
+    /// let socket = Socket::new(Domain::ipv4(), Type::stream(), None)?;
+    ///
+    /// // Retrieve the flags, using nothing `()` as argument.
+    /// let flags = socket.fcntl(libc::F_GETFD, ())?;
+    /// assert!((flags & libc::FD_CLOEXEC) == 0);
+    ///
+    /// // Now we set the `FD_CLOEXEC` flag.
+    /// socket.fcntl(libc::F_SETFD, flags | libc::FD_CLOEXEC)?;
+    ///
+    /// // Now the flag should be set.
+    /// let flags = socket.fcntl(libc::F_GETFD, ())?;
+    /// assert!((flags & libc::FD_CLOEXEC) != 0);
+    ///
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fcntl<T>(&self, cmd: c_int, arg: T) -> io::Result<c_int> {
+        sys::fcntl(self.inner, cmd, arg)
     }
 }
 
-impl<'a> Read for &'a Socket {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        (&self.inner).read(buf)
+impl From<TcpStream> for Socket {
+    fn from(socket: TcpStream) -> Socket {
+        unsafe { Socket::from_raw_fd(socket.into_raw_fd()) }
     }
 }
 
-impl Write for Socket {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+impl Into<TcpStream> for Socket {
+    fn into(self) -> TcpStream {
+        unsafe { TcpStream::from_raw_fd(self.into_raw_fd()) }
     }
 }
 
-impl<'a> Write for &'a Socket {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        (&self.inner).write(buf)
+impl From<TcpListener> for Socket {
+    fn from(socket: TcpListener) -> Socket {
+        unsafe { Socket::from_raw_fd(socket.into_raw_fd()) }
     }
+}
 
-    fn flush(&mut self) -> io::Result<()> {
-        (&self.inner).flush()
+impl Into<TcpListener> for Socket {
+    fn into(self) -> TcpListener {
+        unsafe { TcpListener::from_raw_fd(self.into_raw_fd()) }
+    }
+}
+
+impl From<UdpSocket> for Socket {
+    fn from(socket: UdpSocket) -> Socket {
+        unsafe { Socket::from_raw_fd(socket.into_raw_fd()) }
+    }
+}
+
+impl Into<UdpSocket> for Socket {
+    fn into(self) -> UdpSocket {
+        unsafe { UdpSocket::from_raw_fd(self.into_raw_fd()) }
     }
 }
 
 impl fmt::Debug for Socket {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
-    }
-}
-
-impl From<net::TcpStream> for Socket {
-    fn from(socket: net::TcpStream) -> Socket {
-        Socket {
-            inner: socket.into(),
-        }
-    }
-}
-
-impl From<net::TcpListener> for Socket {
-    fn from(socket: net::TcpListener) -> Socket {
-        Socket {
-            inner: socket.into(),
-        }
-    }
-}
-
-impl From<net::UdpSocket> for Socket {
-    fn from(socket: net::UdpSocket) -> Socket {
-        Socket {
-            inner: socket.into(),
-        }
-    }
-}
-
-#[cfg(all(unix, feature = "unix"))]
-impl From<UnixStream> for Socket {
-    fn from(socket: UnixStream) -> Socket {
-        Socket {
-            inner: socket.into(),
-        }
-    }
-}
-
-#[cfg(all(unix, feature = "unix"))]
-impl From<UnixListener> for Socket {
-    fn from(socket: UnixListener) -> Socket {
-        Socket {
-            inner: socket.into(),
-        }
-    }
-}
-
-#[cfg(all(unix, feature = "unix"))]
-impl From<UnixDatagram> for Socket {
-    fn from(socket: UnixDatagram) -> Socket {
-        Socket {
-            inner: socket.into(),
-        }
-    }
-}
-
-impl From<Socket> for net::TcpStream {
-    fn from(socket: Socket) -> net::TcpStream {
-        socket.inner.into()
-    }
-}
-
-impl From<Socket> for net::TcpListener {
-    fn from(socket: Socket) -> net::TcpListener {
-        socket.inner.into()
-    }
-}
-
-impl From<Socket> for net::UdpSocket {
-    fn from(socket: Socket) -> net::UdpSocket {
-        socket.inner.into()
-    }
-}
-
-#[cfg(all(unix, feature = "unix"))]
-impl From<Socket> for UnixStream {
-    fn from(socket: Socket) -> UnixStream {
-        socket.inner.into()
-    }
-}
-
-#[cfg(all(unix, feature = "unix"))]
-impl From<Socket> for UnixListener {
-    fn from(socket: Socket) -> UnixListener {
-        socket.inner.into()
-    }
-}
-
-#[cfg(all(unix, feature = "unix"))]
-impl From<Socket> for UnixDatagram {
-    fn from(socket: Socket) -> UnixDatagram {
-        socket.inner.into()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::net::SocketAddr;
-
-    use super::*;
-
-    #[test]
-    fn connect_timeout_unrouteable() {
-        // this IP is unroutable, so connections should always time out
-        let addr = "10.255.255.1:80".parse::<SocketAddr>().unwrap().into();
-
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-        match socket.connect_timeout(&addr, Duration::from_millis(250)) {
-            Ok(_) => panic!("unexpected success"),
-            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
-            Err(e) => panic!("unexpected error {}", e),
-        }
-    }
-
-    #[test]
-    fn connect_timeout_unbound() {
-        // bind and drop a socket to track down a "probably unassigned" port
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-        let addr = "127.0.0.1:0".parse::<SocketAddr>().unwrap().into();
-        socket.bind(&addr).unwrap();
-        let addr = socket.local_addr().unwrap();
-        drop(socket);
-
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-        match socket.connect_timeout(&addr, Duration::from_millis(250)) {
-            Ok(_) => panic!("unexpected success"),
-            Err(ref e)
-                if e.kind() == io::ErrorKind::ConnectionRefused
-                    || e.kind() == io::ErrorKind::TimedOut => {}
-            Err(e) => panic!("unexpected error {}", e),
-        }
-    }
-
-    #[test]
-    fn connect_timeout_valid() {
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-        socket
-            .bind(&"127.0.0.1:0".parse::<SocketAddr>().unwrap().into())
-            .unwrap();
-        socket.listen(128).unwrap();
-
-        let addr = socket.local_addr().unwrap();
-
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-        socket
-            .connect_timeout(&addr, Duration::from_millis(250))
-            .unwrap();
-    }
-
-    #[test]
-    #[cfg(all(unix, feature = "pair", feature = "unix"))]
-    fn pair() {
-        let (mut a, mut b) = Socket::pair(Domain::unix(), Type::stream(), None).unwrap();
-        a.write_all(b"hello world").unwrap();
-        let mut buf = [0; 11];
-        b.read_exact(&mut buf).unwrap();
-        assert_eq!(buf, &b"hello world"[..]);
-    }
-
-    #[test]
-    #[cfg(all(unix, feature = "unix"))]
-    fn unix() {
-        use tempdir::TempDir;
-
-        let dir = TempDir::new("unix").unwrap();
-        let addr = SockAddr::unix(dir.path().join("sock")).unwrap();
-
-        let listener = Socket::new(Domain::unix(), Type::stream(), None).unwrap();
-        listener.bind(&addr).unwrap();
-        listener.listen(10).unwrap();
-
-        let mut a = Socket::new(Domain::unix(), Type::stream(), None).unwrap();
-        a.connect(&addr).unwrap();
-
-        let mut b = listener.accept().unwrap().0;
-
-        a.write_all(b"hello world").unwrap();
-        let mut buf = [0; 11];
-        b.read_exact(&mut buf).unwrap();
-        assert_eq!(buf, &b"hello world"[..]);
-    }
-
-    #[test]
-    fn keepalive() {
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-        socket.set_keepalive(Some(Duration::from_secs(7))).unwrap();
-        // socket.keepalive() doesn't work on Windows #24
-        #[cfg(unix)]
-        assert_eq!(socket.keepalive().unwrap(), Some(Duration::from_secs(7)));
-        socket.set_keepalive(None).unwrap();
-        #[cfg(unix)]
-        assert_eq!(socket.keepalive().unwrap(), None);
-    }
-
-    #[test]
-    fn nodelay() {
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
-
-        assert!(socket.set_nodelay(true).is_ok());
-
-        let result = socket.nodelay();
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 }

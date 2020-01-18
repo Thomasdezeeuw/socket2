@@ -8,36 +8,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Utilities for handling sockets
+// # Source code structure.
+//
+// All types and methods that are available on (almost) all platforms are
+// defined in the first level of the source, i.e. `src/*.rs` files. Additional
+// API that is platform specific, e.g. `accept4(2)` is defined in
+// `src/sys/*.rs`, only for the platforms that support it.
+
+//! Utilities for creating sockets.
 //!
-//! This crate is sort of an evolution of the `net2` crate after seeing the
-//! issues on it over time. The intention of this crate is to provide as direct
-//! as possible access to the system's functionality for sockets as possible. No
-//! extra fluff (e.g. multiple syscalls or builders) provided in this crate. As
-//! a result using this crate can be a little wordy, but it should give you
-//! maximal flexibility over configuration of sockets.
+//! The goal of this crate is to create a socket using advanced configuration
+//! options (those that are not available in the stdlib types) without using any
+//! code.
 //!
-//! # Examples
+//! This crate provides **no** cross-platform utilities, no extra goodies, no
+//! creature comforts. It is up to the user to known how to use sockets when
+//! using this crate. *If you don't know how to create a socket using
+//! libc/system calls then this crate is not for you*.
 //!
-//! ```no_run
-//! use std::net::SocketAddr;
-//! use socket2::{Socket, Domain, Type};
-//!
-//! // create a TCP listener bound to two addresses
-//! let socket = Socket::new(Domain::ipv6(), Type::stream(), None).unwrap();
-//!
-//! socket.bind(&"[::1]:12345".parse::<SocketAddr>().unwrap().into()).unwrap();
-//! socket.set_only_v6(false);
-//! socket.listen(128).unwrap();
-//!
-//! let listener = socket.into_tcp_listener();
-//! // ...
-//! ```
+//! To get started see the [`Socket`] type.
 
 #![doc(html_root_url = "https://docs.rs/socket2/0.3")]
-#![deny(missing_docs)]
-
-use crate::utils::NetInt;
+#![deny(
+    missing_docs,
+    missing_debug_implementations,
+    rust_2018_idioms,
+    unused_imports,
+    dead_code
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Disallow warnings when running tests.
+#![cfg_attr(test, deny(warnings))]
+// Disallow warnings in examples.
+#![doc(test(attr(deny(warnings))))]
 
 mod sockaddr;
 mod socket;
@@ -64,7 +67,7 @@ pub use socket::Socket;
 ///
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Domain(c_int);
 
 impl Domain {
@@ -100,7 +103,7 @@ impl From<Domain> for c_int {
 ///
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Type(c_int);
 
 impl Type {
@@ -149,7 +152,7 @@ impl From<Type> for c_int {
 ///
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Protocol(c_int);
 
 impl Protocol {
@@ -186,6 +189,9 @@ impl From<Protocol> for c_int {
     }
 }
 
+/*
+use crate::utils::NetInt;
+
 fn hton<I: NetInt>(i: I) -> I {
     i.to_be()
 }
@@ -193,3 +199,4 @@ fn hton<I: NetInt>(i: I) -> I {
 fn ntoh<I: NetInt>(i: I) -> I {
     I::from_be(i)
 }
+*/

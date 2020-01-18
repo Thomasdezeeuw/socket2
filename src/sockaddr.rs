@@ -1,17 +1,14 @@
-use std::fmt;
-use std::mem::{self, MaybeUninit};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::ptr;
+use std::{fmt, mem};
 
 #[cfg(any(unix, target_os = "redox"))]
 use libc::{
-    sa_family_t, sockaddr, sockaddr_in, sockaddr_in6, sockaddr_storage, socklen_t, AF_INET,
-    AF_INET6,
+    sa_family_t, sockaddr_in, sockaddr_in6, sockaddr_storage, socklen_t, AF_INET, AF_INET6,
 };
 #[cfg(windows)]
 use winapi::shared::ws2def::{
-    ADDRESS_FAMILY as sa_family_t, AF_INET, AF_INET6, SOCKADDR as sockaddr,
-    SOCKADDR_IN as sockaddr_in, SOCKADDR_STORAGE as sockaddr_storage,
+    ADDRESS_FAMILY as sa_family_t, AF_INET, AF_INET6, SOCKADDR_IN as sockaddr_in,
+    SOCKADDR_STORAGE as sockaddr_storage,
 };
 #[cfg(windows)]
 use winapi::shared::ws2ipdef::SOCKADDR_IN6_LH as sockaddr_in6;
@@ -28,7 +25,7 @@ pub struct SockAddr {
 }
 
 impl fmt::Debug for SockAddr {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = fmt.debug_struct("SockAddr");
         builder.field("family", &self.family());
         if let Some(addr) = self.as_inet() {
@@ -42,19 +39,8 @@ impl fmt::Debug for SockAddr {
 
 impl SockAddr {
     /// Constructs a `SockAddr` from its raw components.
-    pub unsafe fn from_raw_parts(addr: *const sockaddr, len: socklen_t) -> SockAddr {
-        let mut storage = MaybeUninit::<sockaddr_storage>::uninit();
-        ptr::copy_nonoverlapping(
-            addr as *const _ as *const u8,
-            &mut storage as *mut _ as *mut u8,
-            len as usize,
-        );
-
-        SockAddr {
-            // This is safe as we written the address to `storage` above.
-            storage: storage.assume_init(),
-            len: len,
-        }
+    pub unsafe fn from_raw_parts(addr: sockaddr_storage, len: socklen_t) -> SockAddr {
+        SockAddr { storage: addr, len }
     }
 
     /// Constructs a `SockAddr` with the family `AF_UNIX` and the provided path.
@@ -163,8 +149,8 @@ impl SockAddr {
     }
 
     /// Returns a raw pointer to the address.
-    pub fn as_ptr(&self) -> *const sockaddr {
-        &self.storage as *const _ as *const _
+    pub fn as_ptr(&self) -> *const sockaddr_storage {
+        &self.storage
     }
 }
 
@@ -182,7 +168,7 @@ impl From<SocketAddrV4> for SockAddr {
     fn from(addr: SocketAddrV4) -> SockAddr {
         unsafe {
             SockAddr::from_raw_parts(
-                &addr as *const _ as *const _,
+                *(&addr as *const _ as *const _),
                 mem::size_of::<SocketAddrV4>() as socklen_t,
             )
         }
@@ -193,7 +179,7 @@ impl From<SocketAddrV6> for SockAddr {
     fn from(addr: SocketAddrV6) -> SockAddr {
         unsafe {
             SockAddr::from_raw_parts(
-                &addr as *const _ as *const _,
+                *(&addr as *const _ as *const _),
                 mem::size_of::<SocketAddrV6>() as socklen_t,
             )
         }
