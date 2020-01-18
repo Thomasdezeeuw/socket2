@@ -120,7 +120,7 @@ impl From<Domain> for c_int {
 ///
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
-#[derive(Copy, Clone, Debug)]
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub struct Type(c_int);
 
 impl Type {
@@ -156,34 +156,23 @@ impl From<Type> for c_int {
 
 /// Protocol specification used for creating sockets via `Socket::new`.
 ///
-/// This is a newtype wrapper around an integer which provides a nicer API in
-/// addition to an injection point for documentation.
-///
-/// This type is freely interconvertible with the `i32` type, however, if a raw
-/// value needs to be provided.
-#[derive(Copy, Clone, Debug)]
+/// This type is freely interconvertible with C's `int` type if a raw value
+/// needs to be provided.
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub struct Protocol(c_int);
 
 impl Protocol {
     /// Protocol corresponding to `ICMPv4`.
-    pub fn icmpv4() -> Self {
-        Protocol(sys::IPPROTO_ICMP)
-    }
+    pub const ICMPV4: Protocol = Protocol(sys::IPPROTO_ICMP);
 
     /// Protocol corresponding to `ICMPv6`.
-    pub fn icmpv6() -> Self {
-        Protocol(sys::IPPROTO_ICMPV6)
-    }
+    pub const ICMPV6: Protocol = Protocol(sys::IPPROTO_ICMPV6);
 
     /// Protocol corresponding to `TCP`.
-    pub fn tcp() -> Self {
-        Protocol(sys::IPPROTO_TCP)
-    }
+    pub const TCP: Protocol = Protocol(sys::IPPROTO_TCP);
 
     /// Protocol corresponding to `UDP`.
-    pub fn udp() -> Self {
-        Protocol(sys::IPPROTO_UDP)
-    }
+    pub const UDP: Protocol = Protocol(sys::IPPROTO_UDP);
 }
 
 impl From<c_int> for Protocol {
