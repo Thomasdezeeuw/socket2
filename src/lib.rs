@@ -107,7 +107,7 @@ pub struct SockAddr {
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
 #[derive(Copy, Clone)]
-pub struct Domain(i32);
+pub struct Domain(c_int);
 
 impl Domain {
     /// Domain for IPv4 communication, corresponding to `AF_INET`.
@@ -143,7 +143,7 @@ impl From<Domain> for c_int {
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
 #[derive(Copy, Clone)]
-pub struct Type(i32);
+pub struct Type(c_int);
 
 impl Type {
     /// Type corresponding to `SOCK_STREAM`.
@@ -192,7 +192,41 @@ impl From<Type> for c_int {
 /// This type is freely interconvertible with the `i32` type, however, if a raw
 /// value needs to be provided.
 #[derive(Copy, Clone)]
-pub struct Protocol(i32);
+pub struct Protocol(c_int);
+
+impl Protocol {
+    /// Protocol corresponding to `ICMPv4`.
+    pub fn icmpv4() -> Self {
+        Protocol(sys::IPPROTO_ICMP)
+    }
+
+    /// Protocol corresponding to `ICMPv6`.
+    pub fn icmpv6() -> Self {
+        Protocol(sys::IPPROTO_ICMPV6)
+    }
+
+    /// Protocol corresponding to `TCP`.
+    pub fn tcp() -> Self {
+        Protocol(sys::IPPROTO_TCP)
+    }
+
+    /// Protocol corresponding to `UDP`.
+    pub fn udp() -> Self {
+        Protocol(sys::IPPROTO_UDP)
+    }
+}
+
+impl From<c_int> for Protocol {
+    fn from(p: c_int) -> Protocol {
+        Protocol(p)
+    }
+}
+
+impl From<Protocol> for c_int {
+    fn from(p: Protocol) -> c_int {
+        p.0
+    }
+}
 
 fn hton<I: NetInt>(i: I) -> I {
     i.to_be()
