@@ -127,27 +127,19 @@ impl Type {
     /// Type corresponding to `SOCK_STREAM`.
     ///
     /// Used for protocols such as TCP.
-    pub fn stream() -> Type {
-        Type(sys::SOCK_STREAM)
-    }
+    pub const STREAM: Type = Type(sys::SOCK_STREAM);
 
     /// Type corresponding to `SOCK_DGRAM`.
     ///
     /// Used for protocols such as UDP.
-    pub fn dgram() -> Type {
-        Type(sys::SOCK_DGRAM)
-    }
+    pub const DGRAM: Type = Type(sys::SOCK_DGRAM);
 
     /// Type corresponding to `SOCK_SEQPACKET`.
-    pub fn seqpacket() -> Type {
-        Type(sys::SOCK_SEQPACKET)
-    }
+    pub const SEQPACKET: Type = Type(sys::SOCK_SEQPACKET);
 
     /// Type corresponding to `SOCK_RAW`.
     #[cfg(not(target_os = "redox"))]
-    pub fn raw() -> Type {
-        Type(sys::SOCK_RAW)
-    }
+    pub const RAW: Type = Type(sys::SOCK_RAW);
 }
 
 impl From<c_int> for Type {
