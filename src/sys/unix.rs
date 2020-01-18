@@ -24,13 +24,16 @@ use std::time::{Duration, Instant};
 
 use libc::{self, c_void, socklen_t, ssize_t};
 
-use crate::Domain;
+use crate::{Domain, Type};
 
 #[allow(non_camel_case_types)]
 pub(crate) type c_int = libc::c_int;
 
 // Used in `Domain`.
 pub(crate) use libc::{AF_INET, AF_INET6};
+// Used in `Type`.
+pub(crate) use libc::{SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM};
+
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "dragonfly", target_os = "freebsd",
                  target_os = "ios", target_os = "macos",
@@ -88,6 +91,45 @@ impl Domain {
     #[cfg(target_os = "linux")]
     pub fn packet() -> Domain {
         Domain(libc::AF_PACKET)
+    }
+}
+
+/// Unix only API.
+impl Type {
+    /// Set `SOCK_NONBLOCK` on the `Type`.
+    ///
+    /// # Notes
+    ///
+    /// This function is only available on Android, DragonFlyBSD, FreeBSD,
+    /// Linux, NetBSD and OpenBSD.
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "linux",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub fn non_blocking(self) -> Type {
+        Type(self.0 | libc::SOCK_NONBLOCK)
+    }
+
+    /// Set `SOCK_CLOEXEC` on the `Type`.
+    ///
+    /// # Notes
+    ///
+    /// This function is only available on Android, DragonFlyBSD, FreeBSD,
+    /// Linux, NetBSD and OpenBSD.
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "linux",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub fn cloexec(self) -> Type {
+        Type(self.0 | libc::SOCK_CLOEXEC)
     }
 }
 

@@ -15,11 +15,6 @@ use std::net::{self, Ipv4Addr, Ipv6Addr, Shutdown};
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::time::Duration;
 
-#[cfg(any(unix, target_os = "redox"))]
-use libc as c;
-#[cfg(windows)]
-use winapi::shared::ws2def as c;
-
 use crate::sys;
 use crate::{Domain, Protocol, SockAddr, Socket, Type};
 
@@ -779,32 +774,6 @@ impl From<Socket> for UnixDatagram {
     }
 }
 
-impl Type {
-    /// Type corresponding to `SOCK_STREAM`
-    ///
-    /// Used for protocols such as TCP.
-    pub fn stream() -> Type {
-        Type(c::SOCK_STREAM)
-    }
-
-    /// Type corresponding to `SOCK_DGRAM`
-    ///
-    /// Used for protocols such as UDP.
-    pub fn dgram() -> Type {
-        Type(c::SOCK_DGRAM)
-    }
-
-    /// Type corresponding to `SOCK_SEQPACKET`
-    pub fn seqpacket() -> Type {
-        Type(sys::SOCK_SEQPACKET)
-    }
-
-    /// Type corresponding to `SOCK_RAW`
-    pub fn raw() -> Type {
-        Type(sys::SOCK_RAW)
-    }
-}
-
 impl crate::Protocol {
     /// Protocol corresponding to `ICMPv4`
     pub fn icmpv4() -> Self {
@@ -824,18 +793,6 @@ impl crate::Protocol {
     /// Protocol corresponding to `UDP`
     pub fn udp() -> Self {
         crate::Protocol(sys::IPPROTO_UDP)
-    }
-}
-
-impl From<i32> for Type {
-    fn from(a: i32) -> Type {
-        Type(a)
-    }
-}
-
-impl From<Type> for i32 {
-    fn from(a: Type) -> i32 {
-        a.0
     }
 }
 
