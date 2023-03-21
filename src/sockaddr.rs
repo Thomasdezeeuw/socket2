@@ -154,6 +154,11 @@ impl SockAddr {
         &self.storage as *const _ as *const _
     }
 
+    /// Retuns the address as the storage.
+    pub const fn as_storage(self) -> sockaddr_storage {
+        self.storage
+    }
+
     /// Returns a raw pointer to the address storage.
     #[cfg(all(unix, not(target_os = "redox")))]
     pub(crate) const fn as_storage_ptr(&self) -> *const sockaddr_storage {
