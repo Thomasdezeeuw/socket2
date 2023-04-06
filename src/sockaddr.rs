@@ -159,6 +159,16 @@ impl SockAddr {
         self.storage
     }
 
+    /// Set the length.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure that the address up to `length` bytes is properly
+    /// initialised.
+    pub unsafe fn set_length(&mut self, length: socklen_t) {
+        self.len = length;
+    }
+
     /// Returns a raw pointer to the address storage.
     #[cfg(all(unix, not(target_os = "redox")))]
     pub(crate) const fn as_storage_ptr(&self) -> *const sockaddr_storage {
