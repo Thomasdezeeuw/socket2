@@ -1,6 +1,6 @@
 use std::mem::{self, size_of, MaybeUninit};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::{fmt, io};
+use std::{fmt, io, slice};
 
 use crate::sys::{
     sa_family_t, sockaddr, sockaddr_in, sockaddr_in6, sockaddr_storage, socklen_t, AF_INET,
@@ -304,6 +304,28 @@ impl From<SocketAddrV6> for SockAddr {
     }
 }
 
+impl Eq for SockAddr {}
+
+impl PartialEq for SockAddr {
+    fn eq(&self, other: &Self) -> bool {
+        // Because we don't know what format the address have we'll compare
+        // based on the bytes of the storage, which includes the `ss_family` and
+        // (slice comparison) compares lengths.
+        // SAFETY: on creation the creator must ensure that atleast
+        // `self.len` bytes are initiaised of `self.storage`, same goes for
+        // `other`.
+        unsafe {
+            slice::from_raw_parts::<'_, u8>(
+                &self.storage as *const _ as *const _,
+                self.len as usize,
+            ) == slice::from_raw_parts::<'_, u8>(
+                &other.storage as *const _ as *const _,
+                other.len as usize,
+            )
+        }
+    }
+}
+
 impl fmt::Debug for SockAddr {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = fmt.debug_struct("SockAddr");
@@ -362,4 +384,20 @@ fn ipv6() {
     assert_eq!(addr.as_socket(), Some(SocketAddr::V6(std)));
     assert!(addr.as_socket_ipv4().is_none());
     assert_eq!(addr.as_socket_ipv6(), Some(std));
+}
+
+#[test]
+fn sockaddr_equal() {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    let addr4 = SockAddr::from(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 9876));
+    let addr6 = SockAddr::from(SocketAddrV6::new(
+        Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8),
+        9876,
+        11,
+        12,
+    ));
+
+    assert_eq!(addr4, addr4);
+    assert_eq!(addr6, addr6);
+    assert_ne!(addr4, addr6);
 }
